@@ -34,8 +34,7 @@ export default function DoctorSlots() {
     })
       .then((res) => {
         setPatient(res.data)
-        console.log("Patient fetched:", res.data)
-        loadMyAppointments(res.data.id) // Load my appointments once patient is fetched
+        loadMyAppointments(res.data.id)
       })
       .catch((err) => {
         console.error('Failed to load patient info', err)
@@ -92,6 +91,14 @@ export default function DoctorSlots() {
     return d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
   }
 
+  const getStatusBadge = (status) => {
+    const s = (status || '').toUpperCase()
+    if (s === 'COMPLETED') return <span className="status-pill status-completed">Completed</span>
+    if (s === 'SCHEDULED') return <span className="status-pill status-scheduled">Scheduled</span>
+    if (s === 'CANCELLED') return <span className="status-pill status-cancelled">Cancelled</span>
+    return <span className="status-pill status-pending">{status || 'Available'}</span>
+  }
+
   // -------------------- Book Now handler --------------------
   const handleBookNow = async (slotId) => {
     if (!isAuthenticated) {
@@ -100,186 +107,261 @@ export default function DoctorSlots() {
       return
     }
 
-    if (!patient || !patient.id) {
-      console.error("Patient object missing or no ID:", patient)
-      toast.error('Patient profile missing. Please complete your registration.')
+    if (!patient?.id) {
+      toast.error('Patient profile not loaded. Please ensure you are logged in as a patient.')
       return
     }
 
     setBookingSlotId(slotId)
-  const reponse=  await api.put(`/appointments/book/${patient.id}/${slotId}`, {}, {
-      headers: { Authorization: `Bearer ${token}` }
-    })
-      .then((data) => {
-        toast.success('Appointment booked successfully!')
-        setBookingSlotId(null)
-        loadSlots() // refresh available slots
-        loadMyAppointments(patient.id) // refresh my appointments
 
-    const { razorpayOrderId, amount,appointmentId } = data.data
+    api.post(
+      `/appointments/${slotId}/book`,
+      {},
+      {
+        params: { patientId: patient.id },
+        headers: { Authorization: `Bearer ${token}` },
+      }
+    )
+      .then((res) => {
+        console.log('Book response:', res.data)
+        const paymentOrderId = res.data.paymentOrderId
+        const amount = res.data.amount || 50000
 
-        console.log(data)
-        
+        const options = {
+          key: "rzp_test_YourKeyId",
+          amount: amount,
+          currency: "INR",
+          name: "Clinic Management System",
+          description: "Doctor Appointment Fee",
+          order_id: paymentOrderId,
+          handler: function (response) {
+            toast.success("Payment Successful! Verifying on server...")
+            api.post(
+              '/appointments/verify-payment',
+              {
+                razorpay_order_id: response.razorpay_order_id,
+                razorpay_payment_id: response.razorpay_payment_id,
+                razorpay_signature: response.razorpay_signature,
+                appointmentId: slotId
+              },
+              {
+                headers: { Authorization: `Bearer ${token}` }
+              }
+            )
+              .then((vRes) => {
+                toast.success("Payment verified! Appointment confirmed.")
+                loadSlots()
+                loadMyAppointments(patient.id)
+              })
+              .catch((vErr) => {
+                console.error(vErr)
+                toast.error("Payment verification failed on server.")
+              })
+          },
+          prefill: {
+            name: user?.fullName || user?.name || "Patient",
+            email: user?.email || "patient@example.com",
+            contact: user?.phoneNumber || "9999999999"
+          },
+          theme: {
+            color: "#0284c7"
+          }
+        }
 
-        // razorpay4
- var options = {
-    "key": "rzp_test_S060WMnc2eFoWe", // Enter the Key ID generated from the Dashboard
-    "amount": "50000", // Amount is in currency subunits. 
-    "currency": "INR",
-    "name": "Acme Corp",
-    "description": "Test Transaction",
-    "image": "https://example.com/your_logo",
-    "order_id": razorpayOrderId, //This is a sample Order ID. Pass the `id` obtained in the response of Step 1
-    "handler": function (response){
-        alert(response.razorpay_payment_id);
-        alert(response.razorpay_order_id);
-        alert(response.razorpay_signature)
-
-         api.post(`/appointments/confirm`, {
-  razorpayOrderId: response.razorpay_order_id,
-  razorpayPaymentId: response.razorpay_payment_id,
-  razorpaySignature: response.razorpay_signature
-}, {
-  headers: { Authorization: `Bearer ${token}` }
-})
-
-
-
-    },
-    "prefill": {
-        "name": "Gaurav Kumar",
-        "email": "gaurav.kumar@example.com",
-        "contact": "+919876543210"
-    },
-    "notes": {
-        "address": "Razorpay Corporate Office"
-    },
-    "theme": {
-        "color": "#3399cc"
-    }
-};
-var rzp1 = new Razorpay(options);
-rzp1.on('payment.failed', function (response){
-        alert(response.error.code);
-        alert(response.error.description);
-        alert(response.error.source);
-        alert(response.error.step);
-        alert(response.error.reason);
-        alert(response.error.metadata.order_id);
-        alert(response.error.metadata.payment_id);
-});
-const rzp = new window.Razorpay(options)
-  rzp.open()
-
-        // =======
-
-        
+        const rzp = new window.Razorpay(options)
+        rzp.open()
       })
       .catch((err) => {
         console.error(err)
         toast.error(err.response?.data?.message || 'Failed to book appointment.')
+      })
+      .finally(() => {
         setBookingSlotId(null)
       })
   }
 
-  
-
-  // -------------------- Render --------------------
   return (
     <main className="main">
       <PageTitle
         title="Doctor Appointments"
-        subtitle="Book a new slot or view your appointments."
-        current="Doctor Slots"
+        subtitle="Reserve an open consultation slot or view your booked appointments."
+        current="Book Slot"
       />
-      <section className="section">
+      <section className="section py-4">
         <div className="container">
-          {loading && <p>Loading slots...</p>}
-          {error && <p className="text-danger">{error}</p>}
-
+          {/* Doctor Header Profile */}
           {doctor && (
-            <div className="mb-4">
-              <h4>{doctor.doctorName}</h4>
-              <p className="text-muted mb-1">{doctor.specialization}</p>
-              {doctor.qualification && <p className="small mb-1">{doctor.qualification}</p>}
-              {doctor.yearsOfExperience != null && (
-                <p className="small">{doctor.yearsOfExperience}+ years experience</p>
+            <div className="modern-card p-4 mb-4 border-0 shadow-sm" style={{ background: 'linear-gradient(135deg, #ffffff 0%, #f0fdfa 100%)' }}>
+              <div className="d-flex flex-wrap align-items-center justify-content-between gap-3">
+                <div className="d-flex align-items-center gap-3">
+                  <div 
+                    className="rounded-circle d-flex align-items-center justify-content-center text-primary shadow-sm"
+                    style={{ width: '64px', height: '64px', backgroundColor: '#e0f2fe', fontSize: '1.8rem' }}
+                  >
+                    <i className="bi bi-person-badge"></i>
+                  </div>
+                  <div>
+                    <h3 className="fw-bold mb-1 text-dark">{doctor.doctorName}</h3>
+                    <div className="d-flex flex-wrap align-items-center gap-2">
+                      <span className="badge bg-primary-subtle text-primary fw-semibold px-2 py-1 rounded-pill">
+                        {doctor.specialization || 'Medical Specialist'}
+                      </span>
+                      {doctor.qualification && (
+                        <span className="text-muted small">
+                          <i className="bi bi-mortarboard me-1"></i>{doctor.qualification}
+                        </span>
+                      )}
+                      {doctor.yearsOfExperience != null && (
+                        <span className="text-muted small">
+                          <i className="bi bi-award me-1"></i>{doctor.yearsOfExperience}+ Years Experience
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="d-flex align-items-center gap-3">
+                  <div className="text-end">
+                    <span className="text-muted small d-block">Consultation Fee</span>
+                    <strong className="text-success fs-5">₹500.00</strong>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {loading && (
+            <div className="text-center py-4">
+              <div className="spinner-border text-primary" role="status"></div>
+              <p className="mt-2 text-muted">Loading slots...</p>
+            </div>
+          )}
+
+          {error && <div className="alert alert-danger rounded-3"><i className="bi bi-exclamation-circle me-2"></i>{error}</div>}
+
+          {/* Available Slots */}
+          <div className="mb-5">
+            <div className="d-flex align-items-center justify-content-between mb-3">
+              <h5 className="fw-bold mb-0">
+                <i className="bi bi-calendar-plus text-primary me-2"></i>Available Appointment Slots
+              </h5>
+              <span className="badge bg-light text-dark border">
+                {slots.length} Slots Available
+              </span>
+            </div>
+
+            {!loading && slots.length === 0 && (
+              <div className="bg-white p-4 rounded-3 text-center border shadow-sm">
+                <i className="bi bi-calendar-x text-muted fs-1 mb-2 d-block"></i>
+                <p className="text-muted mb-0">No slots available right now. Please check back later or check another doctor.</p>
+              </div>
+            )}
+
+            {!loading && slots.length > 0 && (
+              <div className="modern-table-container">
+                <div className="table-responsive">
+                  <table className="modern-table table">
+                    <thead>
+                      <tr>
+                        <th>#</th>
+                        <th>Slot Date &amp; Time</th>
+                        <th>Notes / Description</th>
+                        <th>Status</th>
+                        <th className="text-end">Action</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {slots.map((s, index) => (
+                        <tr key={s.appointmentId || index}>
+                          <td><strong>{index + 1}</strong></td>
+                          <td>
+                            <div className="d-flex align-items-center gap-2">
+                              <i className="bi bi-clock text-primary"></i>
+                              <span className="fw-semibold">
+                                {formatDateTime(s.appoinmentDateTime || s.appointmentDateTime)}
+                              </span>
+                            </div>
+                          </td>
+                          <td className="text-muted small">
+                            {s.description || 'General consultation'}
+                          </td>
+                          <td>
+                            <span className="status-pill status-scheduled">Available</span>
+                          </td>
+                          <td className="text-end">
+                            <button
+                              id="rzp-button1"
+                              className="btn-modern-primary btn-sm py-1 px-3"
+                              onClick={() => handleBookNow(s.appointmentId)}
+                              disabled={bookingSlotId === s.appointmentId}
+                            >
+                              {bookingSlotId === s.appointmentId ? (
+                                <>
+                                  <span className="spinner-border spinner-border-sm me-1"></span>
+                                  Booking...
+                                </>
+                              ) : (
+                                <>
+                                  <i className="bi bi-lightning-charge-fill"></i> Book Now
+                                </>
+                              )}
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* My Appointments with this doctor */}
+          {isAuthenticated && (
+            <div>
+              <div className="d-flex align-items-center justify-content-between mb-3">
+                <h5 className="fw-bold mb-0">
+                  <i className="bi bi-bookmark-check text-success me-2"></i>My Bookings with this Doctor
+                </h5>
+              </div>
+
+              {!loading && myAppointments.length === 0 && (
+                <div className="bg-white p-4 rounded-3 text-center border shadow-sm">
+                  <p className="text-muted mb-0">You have not booked any appointments with this doctor yet.</p>
+                </div>
+              )}
+
+              {!loading && myAppointments.length > 0 && (
+                <div className="modern-table-container">
+                  <div className="table-responsive">
+                    <table className="modern-table table">
+                      <thead>
+                        <tr>
+                          <th>#</th>
+                          <th>Doctor</th>
+                          <th>Date &amp; Time</th>
+                          <th>Status</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {myAppointments.map((a, index) => (
+                          <tr key={a.appointmentId || index}>
+                            <td>{index + 1}</td>
+                            <td>
+                              <span className="fw-semibold">{a.doctor?.doctorName || doctor?.doctorName || 'Doctor'}</span>
+                            </td>
+                            <td>{formatDateTime(a.appoinmentDateTime || a.appointmentDateTime)}</td>
+                            <td>{getStatusBadge(a.status)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
               )}
             </div>
           )}
-
-          {/* Available Slots */}
-          <h5>Available Slots</h5>
-          {!loading && slots.length === 0 && (
-            <p className="text-muted">No available slots at the moment.</p>
-          )}
-          {!loading && slots.length > 0 && (
-            <div className="table-responsive mb-4">
-              <table className="table table-bordered align-middle">
-                <thead>
-                  <tr>
-                    <th>#</th>
-                    <th>Slot Date & Time</th>
-                    <th>Status</th>
-                    <th>Action</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {slots.map((s, index) => (
-                    <tr key={s.appointmentId || index}>
-                      <td>{index + 1}</td>
-                      <td>{formatDateTime(s.appoinmentDateTime || s.appointmentDateTime)}</td>
-                      <td>Available</td>
-                      <td>
-                        <button
-                          id='rzp-button1'
-                          className="btn btn-primary btn-sm"
-                          onClick={() => handleBookNow(s.appointmentId)}
-                          disabled={bookingSlotId === s.appointmentId}
-                        >
-                          {bookingSlotId === s.appointmentId ? 'Booking...' : 'Book Now'}
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-
-          {/* My Appointments */}
-          <h5>My Appointments</h5>
-          {!loading && myAppointments.length === 0 && (
-            <p className="text-muted">You have not booked any appointments yet.</p>
-          )}
-          {!loading && myAppointments.length > 0 && (
-            <div className="table-responsive">
-              <table className="table table-bordered align-middle">
-                <thead>
-                  <tr>
-                    <th>#</th>
-                    <th>Doctor</th>
-                    <th>Slot Date & Time</th>
-                    <th>Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {myAppointments.map((a, index) => (
-                    <tr key={a.appointmentId || index}>
-                      <td>{index + 1}</td>
-                      <td>{a.doctor?.doctorName || '-'}</td>
-                      <td>{formatDateTime(a.appoinmentDateTime || a.appointmentDateTime)}</td>
-                      <td>{a.status}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-
         </div>
-
-        
       </section>
     </main>
   )
